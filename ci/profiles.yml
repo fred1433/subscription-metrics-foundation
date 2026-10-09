@@ -4,7 +4,8 @@ subscription_metrics:
   outputs:
     bigquery:
       type: bigquery
-      method: oauth
+      method: oauth-secrets
+      token: compile-only-fake-token   # never used: nothing connects
       project: compile-only-project
       dataset: analytics
       location: europe-west2
