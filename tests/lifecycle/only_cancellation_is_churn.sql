@@ -17,6 +17,6 @@ select o.subscription_id, o.due_date
 from {{ ref('stg_platform__orders') }} as o
 inner join {{ ref('fct_subscription_state_daily') }} as s
     on s.subscription_id = o.subscription_id
-    and s.state_date = {{ dbt.dateadd('day', 31, 'o.due_date') }}
+    and s.state_date = {{ date_add_days('o.due_date', 31) }}
 left join cancels as c on c.subscription_id = o.subscription_id
 where o.order_status = 'unpaid_cancelled' and s.subscription_state = 'cancelled' and c.subscription_id is null

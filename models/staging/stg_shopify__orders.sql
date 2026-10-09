@@ -15,8 +15,7 @@ select
     {{ to_pence('current_total_price') }} as current_total_pence,
     source_name,
     source_identifier as platform_order_id,
-    tags,
-    lower(test) = 'true' as is_test,
+    lower(cast(test as {{ dbt.type_string() }})) = 'true' as is_test,
     {{ utc_timestamp('_weld_synced') }} as synced_at_utc
 from ranked
 where rn = 1

@@ -74,7 +74,7 @@ class World:
         self.t = {k: [] for k in [
             "platform.accounts", "platform.account_email_history", "platform.subscriptions",
             "platform.subscription_events", "platform.orders", "platform.payment_transactions",
-            "shopify.customer", "shopify.order", "shopify.order_line", "shopify.refund",
+            "shopify.customer", "shopify.order", "shopify.order_tag", "shopify.order_line_items", "shopify.refund",
             "shopify.order_line_refund", "shopify.transaction",
             "ads.daily_spend",
         ]}
@@ -175,12 +175,14 @@ class World:
             id=oid, customer_id=customer_id, name=name, created_at=iso(created), processed_at=iso(created),
             currency="GBP", subtotal_price=money(gross), total_discounts=money(discount),
             total_price=money(total), current_total_price=money(total), source_name=source_name,
-            source_identifier=source_identifier, tags=tags, test="false", _weld_synced=iso(synced)))
+            source_identifier=source_identifier, test="false", _weld_synced=iso(synced)))
+        for i, tag in enumerate(t for t in tags.split(",") if t):
+            self.t["shopify.order_tag"].append(dict(order_id=oid, index=i, value=tag, _weld_synced=iso(synced)))
         line_ids = []
         for sku, title, q, p in lines:
             lid = self.next_line()
             line_ids.append((lid, q, p))
-            self.t["shopify.order_line"].append(dict(
+            self.t["shopify.order_line_items"].append(dict(
                 id=lid, order_id=oid, sku=sku, title=title, quantity=q, price=money(p), total_discount="0.00",
                 _weld_synced=iso(synced)))
         if with_sale and total > 0:
@@ -296,58 +298,57 @@ class World:
             at = trial_at + dt.timedelta(days=rng.randint(1, 8), hours=rng.randint(0, 5))
             self.event(sub, "cancelled", at, reason=rng.choice(CANCEL_REASONS))
             return
-        k = 0
+        # A clock that only moves forward: every action happens after the previous one and before the
+        # renewal it affects, so an expected renewal date never moves backwards by accident.
+        now = trial_at
         while expected <= LAST_CHARGE_DAY:
-            r = rng.random()
-            k += 1
+            first_action_day = max(now.date() + dt.timedelta(days=1), expected - dt.timedelta(days=5))
+            action_day = None
+            if first_action_day <= expected - dt.timedelta(days=1):
+                action_day = first_action_day + dt.timedelta(
+                    days=rng.randint(0, (expected - dt.timedelta(days=1) - first_action_day).days))
+            r = rng.random() if action_day else 1.0
+            at = dt.datetime.combine(action_day, dt.time(rng.randint(8, 21), rng.randint(0, 59))) if action_day else None
             if r < 0.10:   # Change Date
-                at = dt.datetime.combine(expected - dt.timedelta(days=rng.randint(1, 4)), dt.time(rng.randint(8, 21)))
                 new = expected + dt.timedelta(days=rng.randint(3, 16))
                 self.event(sub, "renewal_date_changed", at, next_renewal=new, previous_renewal=expected)
-                expected = new
+                expected, now = new, at
                 continue
             if r < 0.13:   # skip (event name is an assumption, see README)
-                at = dt.datetime.combine(expected - dt.timedelta(days=rng.randint(1, 3)), dt.time(rng.randint(8, 21)))
                 new = expected + dt.timedelta(days=28)
                 self.event(sub, "skipped", at, next_renewal=new, previous_renewal=expected)
-                expected = new
+                expected, now = new, at
                 continue
             if r < 0.16:   # I need it now: order now, cycle restarts at +28 days
-                at = dt.datetime.combine(expected - dt.timedelta(days=rng.randint(3, 10)),
-                                         dt.time(rng.randint(8, 21), rng.randint(0, 59)))
-                if at.date() <= LAST_CHARGE_DAY:
-                    self.event(sub, "expedited", at, previous_renewal=expected,
-                               next_renewal=at.date() + dt.timedelta(days=28))
-                    po = self._next_po(n)
-                    disc = -1 if (referred and self.subs[sub]['boxes'] == 0) else 0
-                    self._charge_with_referral(sub, po, at.date(), at + dt.timedelta(minutes=30), disc)
-                    expected = at.date() + dt.timedelta(days=28)
-                    continue
-            if r < 0.19:   # pause with a reason, sometimes resumed
-                at = dt.datetime.combine(expected - dt.timedelta(days=rng.randint(1, 5)), dt.time(rng.randint(8, 21)))
+                self.event(sub, "expedited", at, previous_renewal=expected,
+                           next_renewal=at.date() + dt.timedelta(days=28))
+                po = self._next_po(n)
+                disc = -1 if (referred and self.subs[sub]["boxes"] == 0) else 0
+                self._charge_with_referral(sub, po, at.date(), at + dt.timedelta(minutes=30), disc)
+                expected, now = at.date() + dt.timedelta(days=28), at + dt.timedelta(minutes=30)
+                continue
+            if r < 0.19:   # pause with a reason, sometimes resumed (before that day's charge run)
                 self.event(sub, "paused", at, reason=rng.choice(PAUSE_REASONS))
                 back = at.date() + dt.timedelta(days=rng.randint(20, 120))
                 if rng.random() < 0.45 and back < LAST_CHARGE_DAY:
-                    self.event(sub, "resumed", dt.datetime.combine(back, dt.time(9, 30)), next_renewal=back)
+                    now = dt.datetime.combine(back, dt.time(5, 0))
+                    self.event(sub, "resumed", now, next_renewal=back)
                     expected = back
                     continue
                 return
             if r < 0.215 and self.subs[sub]["boxes"] > 0:   # cancel with a reason, sometimes reactivated
-                at = dt.datetime.combine(expected - dt.timedelta(days=rng.randint(1, 6)), dt.time(rng.randint(8, 21)))
                 self.event(sub, "cancelled", at, reason=rng.choice(CANCEL_REASONS))
                 back = at.date() + dt.timedelta(days=rng.randint(30, 150))
                 if rng.random() < 0.15 and back < LAST_CHARGE_DAY:
-                    self.event(sub, "resumed", dt.datetime.combine(back, dt.time(10)), next_renewal=back,
-                               reason="reactivated")
+                    now = dt.datetime.combine(back, dt.time(5, 30))
+                    self.event(sub, "resumed", now, next_renewal=back, reason="reactivated")
                     expected = back
                     continue
                 return
-            # renewal charge on the expected date
+            # renewal charge on the expected date, 06:00 charge run
             po = self._next_po(n)
             at = dt.datetime.combine(expected, dt.time(6, rng.randint(0, 50)))
-            disc = 0
-            if referred and self.subs[sub]["boxes"] == 0:
-                disc = -1  # computed after lines are drawn
+            disc = -1 if (referred and self.subs[sub]["boxes"] == 0) else 0
             if rng.random() < 0.07:
                 self.event(sub, "payment_failed", at, po)
                 self.ptxn(self.subs[sub]["acc"], po, "charge", 0, at, "failed")
@@ -355,24 +356,28 @@ class World:
                 if rng.random() < 0.75 and expected + dt.timedelta(days=retry) <= LAST_CHARGE_DAY:
                     at2 = at + dt.timedelta(days=retry, hours=2)
                     self._charge_with_referral(sub, po, expected, at2, disc)
-                    expected = expected + dt.timedelta(days=28)
+                    expected, now = expected + dt.timedelta(days=28), at2 + dt.timedelta(days=1, hours=4)
                     continue
                 end = expected + dt.timedelta(days=30)
-                if end <= LAST_CHARGE_DAY:
-                    s = self.subs[sub]
-                    self.platform_order(po, sub, s["acc"], "subscription_box", "unpaid_cancelled", expected, None,
-                                        0, 0, motif="payment_retry_exhausted",
-                                        ingested=dt.datetime.combine(end, dt.time(7)))
-                    self.event(sub, "payment_retry_exhausted", dt.datetime.combine(end, dt.time(6, 30)), po)
-                    expected = expected + dt.timedelta(days=28)
-                    while expected <= end:
-                        expected += dt.timedelta(days=28)
-                    continue
-                return
+                if end > LAST_CHARGE_DAY:
+                    return          # still inside the retry window at the cutoff
+                s = self.subs[sub]
+                nxt = expected + dt.timedelta(days=28)
+                while nxt <= end:
+                    nxt += dt.timedelta(days=28)
+                self.platform_order(po, sub, s["acc"], "subscription_box", "unpaid_cancelled", expected, None,
+                                    0, 0, motif="payment_retry_exhausted",
+                                    ingested=dt.datetime.combine(end, dt.time(7)))
+                now = dt.datetime.combine(end, dt.time(6, 30))
+                self.event(sub, "payment_retry_exhausted", now, po, next_renewal=nxt)
+                expected = nxt
+                continue
             self._charge_with_referral(sub, po, expected, at, disc)
+            now = at + dt.timedelta(days=1, hours=4)
             expected = expected + dt.timedelta(days=28)
-            if self.subs[sub]["boxes"] == 1 and rng.random() < 0.05 and at + dt.timedelta(days=3) < AS_OF:
-                self.event(sub, "cat_added", at + dt.timedelta(days=3))
+            if self.subs[sub]["boxes"] == 1 and rng.random() < 0.05 and now + dt.timedelta(days=2) < AS_OF:
+                now = now + dt.timedelta(days=2)
+                self.event(sub, "cat_added", now)
 
     def _next_po(self, n):
         self._po_seq[n] = self._po_seq.get(n, 0) + 1
@@ -387,7 +392,7 @@ class World:
         # occasional partial refund on a box: one sleeve, paid out a few days later
         if self.rng.random() < 0.03:
             order = self.t["shopify.order"][-1]
-            lines = [l for l in self.t["shopify.order_line"] if l["order_id"] == order["id"]]
+            lines = [l for l in self.t["shopify.order_line_items"] if l["order_id"] == order["id"]]
             if lines:
                 l = lines[0]
                 created = at + dt.timedelta(days=self.rng.randint(2, 6))
@@ -517,6 +522,14 @@ def build_fixtures(w: World, scenario: str):
     w.platform_order("PO-F10-S", "SUB-F10", "ACC-F10", "subscription_box", "scheduled", D("2026-09-30"),
                      None, 2900, 0, ingested=T("2026-09-30T20:30:00"))
 
+    # F11 lapsed: one box paid, then the platform never attempts the next renewal (no event at all).
+    # The subscription must stop counting as active once its renewal is more than 35 days overdue.
+    t = T("2026-03-01T12:00:00")
+    w.account("ACC-F11", "jo.kemp@example.org", t, "2 Ash Yard", "SE15 4AA", "fp_f11", 70111)
+    w.subscription("SUB-F11", "ACC-F11", t, 1, 1, 70111, False)
+    w.regular("SUB-F11", "F11", w.trial("SUB-F11", "PO-F11-T", t + dt.timedelta(minutes=2), False),
+              until=D("2026-03-20"))                                                # box 10/03, next due 07/04
+
     # D1 to D3: regular subscribers whose orders the defective scenario will damage in the landing layer
     for tag, day, tpd in [("D1", "2026-05-02T10:00:00", 1), ("D2", "2026-06-12T17:00:00", 2),
                           ("D3", "2026-07-03T08:30:00", 1)]:
@@ -563,11 +576,11 @@ def add_web_one_offs(w: World):
 
 def add_ads(w: World):
     rng = w.rng
-    campaigns = [("meta", "act_meta_1", "cmp_meta_prospecting", "Prospecting UK", 55),
-                 ("meta", "act_meta_1", "cmp_meta_retargeting", "Retargeting", 18),
-                 ("google", "acc_google_1", "cmp_google_brand", "Brand search", 14),
-                 ("google", "acc_google_1", "cmp_google_pmax", "Performance Max", 30),
-                 ("tiktok", "adv_tiktok_1", "cmp_tiktok_spark", "Spark ads UK", 22)]
+    campaigns = [("meta", "act_meta_1", "cmp_meta_prospecting", "Prospecting UK", 7.0),
+                 ("meta", "act_meta_1", "cmp_meta_retargeting", "Retargeting", 2.2),
+                 ("google", "acc_google_1", "cmp_google_brand", "Brand search", 1.8),
+                 ("google", "acc_google_1", "cmp_google_pmax", "Performance Max", 3.8),
+                 ("tiktok", "adv_tiktok_1", "cmp_tiktok_spark", "Spark ads UK", 2.8)]
     day = WORLD_START
     while day <= LAST_CHARGE_DAY:
         growth = 1 + (day - WORLD_START).days / 400
@@ -599,15 +612,18 @@ def inject_landing_faults(w: World):
     # D1: one paid box never reached the landing layer
     gone = by_src["PO-D1-B2"]["id"]
     t["shopify.order"] = [o for o in t["shopify.order"] if o["id"] != gone]
-    t["shopify.order_line"] = [l for l in t["shopify.order_line"] if l["order_id"] != gone]
+    t["shopify.order_line_items"] = [l for l in t["shopify.order_line_items"] if l["order_id"] != gone]
     t["shopify.transaction"] = [x for x in t["shopify.transaction"] if x["order_id"] != gone]
+    t["shopify.order_tag"] = [g for g in t["shopify.order_tag"] if g["order_id"] != gone]
     # D2: the same platform order pushed twice, so two Shopify orders carry one source identifier
     src = by_src["PO-D2-B1"]
     oid, name = w.next_shop_order()
     dup = dict(src, id=oid, name=name, created_at=iso(dt.datetime.fromisoformat(src["created_at"][:-1]) + dt.timedelta(minutes=3)))
     t["shopify.order"].append(dup)
-    for l in [l for l in t["shopify.order_line"] if l["order_id"] == src["id"]]:
-        t["shopify.order_line"].append(dict(l, id=w.next_line(), order_id=oid))
+    for l in [l for l in t["shopify.order_line_items"] if l["order_id"] == src["id"]]:
+        t["shopify.order_line_items"].append(dict(l, id=w.next_line(), order_id=oid))
+    for g in [g for g in t["shopify.order_tag"] if g["order_id"] == src["id"]]:
+        t["shopify.order_tag"].append(dict(g, order_id=oid))
     for x in [x for x in t["shopify.transaction"] if x["order_id"] == src["id"]]:
         t["shopify.transaction"].append(dict(x, id=w.next_txn(), order_id=oid, created_at=dup["created_at"]))
     # D3: a discount applied twice on the way in: landed total is 3.50 lower than the platform charged

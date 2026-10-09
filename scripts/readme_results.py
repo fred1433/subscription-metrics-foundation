@@ -24,7 +24,7 @@ CATEGORY = {
     "missing_in_landing": "paid in the platform, never landed",
     "duplicate_in_landing": "one paid order pushed twice",
     "amount_mismatch": "landed total differs from the charge",
-    "within_arrival_tolerance": "paid 90 minutes before the cutoff, still in transit",
+    "within_arrival_tolerance": "paid shortly before the cutoff, still in transit",
     "scheduled_not_charged": "renewal due today, not charged yet: not missing revenue",
     "non_commercial_blank_order": "blank order created by a card update (motif, not amount)",
     "zero_price_replacement_kept": "free replacement: kept, it shipped and has a cost",
@@ -52,10 +52,32 @@ def table(headers, rows):
     return "\n".join(out)
 
 
+EFFECT = {
+    "missing_in_landing": "missing from the warehouse",
+    "duplicate_in_landing": "in the warehouse twice",
+    "amount_mismatch": "in the warehouse, wrong amount",
+    "within_arrival_tolerance": "not in the warehouse yet",
+    "scheduled_not_charged": "not revenue yet",
+    "non_commercial_blank_order": "in the warehouse, out of order counts",
+    "zero_price_replacement_kept": "in the warehouse, kept",
+    "card_check_reversed": "never in revenue",
+    "refund_recorded_not_paid": "not deducted yet",
+    "duplicate_connector_row": "removed in staging",
+    "second_trial_probable_household": "in the warehouse, flagged only",
+}
+LABEL = {"order_count": "Orders", "completeness": "Completeness", "gross_to_net": "Gross to net",
+         "ad_spend": "Ad spend", "trial_eligibility": "Trials"}
+
+
+def tolerance_hours():
+    with open(os.path.join(ROOT, "dbt_project.yml")) as f:
+        return int(re.search(r"arrival_tolerance_hours:\s*(\d+)", f.read()).group(1))
+
+
 def block_reconciliation():
     con = duckdb.connect(DB["defective"], read_only=True)
-    s = con.execute("""select check_name, compares, unit, source_value, warehouse_value, difference, explained,
-                              unexplained, exceptions from main_reconciliation.rec_summary
+    s = con.execute("""select check_name, unit, source_value, warehouse_value, difference, explained,
+                              unexplained, unexplained_gross, exceptions from main_reconciliation.rec_summary
                        order by case check_name when 'order_count' then 1 when 'completeness' then 2
                        when 'gross_to_net' then 3 when 'ad_spend' then 4 else 5 end""").fetchall()
     items = con.execute("""select check_name, item_key, category, classification, amount_pence
@@ -67,24 +89,29 @@ def block_reconciliation():
     clean = con.execute("select count(*), sum(exceptions), sum(abs(unexplained)) "
                         "from main_reconciliation.rec_summary where status = 'pass'").fetchone()
     con.close()
-    comp_row = next(r for r in s if r[0] == "completeness")
-    diff, expl, unex = comp_row[5], comp_row[6], comp_row[7]
+    comp = next(r for r in s if r[0] == "completeness")
+    diff, unex, gross = comp[4], comp[6], comp[7]
+    transit = [(k, a) for c, k, cat, cl, a in items if cat == "within_arrival_tolerance"]
     short = {"missing_in_landing": "never landed", "duplicate_in_landing": "pushed twice",
-             "amount_mismatch": "landed too low"}
+             "amount_mismatch": "landed too low" }
     exc = [f"`{k}` {gbp(a)} {short.get(cat, cat)}" for c, k, cat, cl, a in items
            if cl == "exception" and c == "completeness"]
+    others = [LABEL[c] for c, *_ , ue, ug, ex in s if c != "completeness" and ue == 0]
     lead = (f"**In short:** the warehouse holds {gbp(abs(diff))} {'less' if diff < 0 else 'more'} than the "
-            f"subscription platform charged. That gap breaks down into one order paid 90 minutes before the cutoff and "
-            f"still in transit ({gbp(expl)}, explained) and {len(exc)} named orders netting {gbp(unex)} "
-            f"({'; '.join(exc)}). The other checks close, and each remaining exception has a key and a reason.\n\n")
-    rows = [(c, comp, fmt(u, sv), fmt(u, wv), fmt(u, d), fmt(u, e) if c in ("order_count", "completeness") else "",
-             fmt(u, ue), ex) for c, comp, u, sv, wv, d, e, ue, ex in s]
-    t1 = table(["Check", "Compares", "Source", "Warehouse", "Difference", "Explained", "Unexplained", "Exceptions"], rows)
-    t2 = table(["", "Check", "Item", "What it is", "Amount"],
-               [("**exception**" if cl == "exception" else "explained", c, f"`{k}`", CATEGORY.get(cat, cat),
-                 gbp(a) if a else "") for c, k, cat, cl, a in items])
-    return (lead + t1 + "\n\nLine by line (amounts are warehouse minus source):\n\n" + t2 +
-            f"\n\nSame checks on the clean scenario: {clean[0]} of 5 pass, {clean[1]} exceptions, "
+            f"subscription platform charged. {'One order' if len(transit) == 1 else f'{len(transit)} orders'} worth "
+            f"{gbp(-sum(a for _, a in transit))} {'was' if len(transit) == 1 else 'were'} paid within the {tolerance_hours()}-hour arrival tolerance and not landed yet (explained). The rest is "
+            f"pinned to {len(exc)} named orders ({'; '.join(exc)}): {gbp(unex)} net, {gbp(gross)} gross, because a "
+            f"duplicate must not hide a missing order. {', '.join(others)} close with nothing unexplained; their "
+            f"exceptions are flagged, not money missing.\n\n")
+    rows = [(LABEL[c], fmt(u, sv), fmt(u, wv), fmt(u, d), fmt(u, ue), fmt(u, ug), ex)
+            for c, u, sv, wv, d, e, ue, ug, ex in s]
+    t1 = table(["Check", "Source", "Warehouse", "Gap", "Unexplained, net", "Unexplained, gross", "Exceptions"], rows)
+    t2 = table(["", "Item", "What it is", "Amount", "Effect"],
+               [("**exception**" if cl == "exception" else "explained", f"`{k}`", CATEGORY.get(cat, cat),
+                 gbp(a) if a else "", EFFECT.get(cat, "")) for c, k, cat, cl, a in items])
+    return (lead + t1 + "\n\nGap is warehouse minus source. Line by line: for completeness items the amount is "
+            "warehouse minus source; for the others it is the amount involved, and Effect says where it sits.\n\n"
+            + t2 + f"\n\nSame checks on the clean scenario: {clean[0]} of 5 pass, {clean[1]} exceptions, "
             f"{gbp(clean[2])} unexplained.")
 
 
@@ -99,7 +126,8 @@ def block_conversion():
     t = table(["Trial cohort", "Converted", "Trials with a closed window", "Conversion", "Still in their window"],
               [(p[:7], n, d, f"{v:.1%}" if v is not None else "not yet measurable", pend)
                for p, n, d, v, pend in rows])
-    return (t + f"\n\nWindow: 42 days from the trial (a demo policy, to be agreed). Cutoff: {cut} UTC. "
+    return ("Trials whose first subscription box was paid within the window, over trials whose window has closed.\n\n"
+            + t + f"\n\nWindow: 42 days from the trial (a demo policy, to be agreed). Cutoff: {cut} UTC. "
             "A trial cancelled before its first box stays in the denominator; trials whose window is still open "
             "are counted apart, never as failures.")
 

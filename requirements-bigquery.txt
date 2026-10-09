@@ -1,0 +1,2 @@
+dbt-bigquery==1.12.1
+sqlglot==30.21.0

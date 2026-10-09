@@ -1,0 +1,11 @@
+# Used only to COMPILE the project for BigQuery in CI. Nothing connects: the project id is fake.
+subscription_metrics:
+  target: bigquery
+  outputs:
+    bigquery:
+      type: bigquery
+      method: oauth
+      project: compile-only-project
+      dataset: analytics
+      location: europe-west2
+      threads: 4

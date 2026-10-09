@@ -9,5 +9,5 @@ gross_to_net,PO-F6-B1:refund:2026-09-30,refund_recorded_not_paid,explained,200
 completeness,PO-D1-B2,missing_in_landing,exception,-2900
 completeness,PO-D2-B1,duplicate_in_landing,exception,5400
 completeness,PO-D3-B1,amount_mismatch,exception,-350
-ad_spend,meta|act_meta_1|cmp_meta_prospecting|2026-08-14,duplicate_connector_row,exception,10874
+ad_spend,meta|act_meta_1|cmp_meta_prospecting|2026-08-14,duplicate_connector_row,exception,1028
 trial_eligibility,PO-F3B-T,second_trial_probable_household,exception,700

@@ -27,7 +27,7 @@ missing as (
     select
         s.platform_order_id as item_key,
         case
-            when s.paid_at_utc > {{ dbt.dateadd('hour', -var('arrival_tolerance_hours'), as_of()) }}
+            when s.paid_at_utc > {{ ts_add_hours(as_of(), -var('arrival_tolerance_hours')) }}
                 then 'within_arrival_tolerance'
             else 'missing_in_landing'
         end as category,

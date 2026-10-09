@@ -17,7 +17,7 @@ sources:
         description: "Charges, failed charges and card checks (the 73p check and its reversal). Representation assumed."
 
   - name: shopify
-    description: "Shopify as landed by the ELT connector. order, customer and transaction follow the connector's documented schema; order_line, refund and order_line_refund are assumed names."
+    description: "Shopify as landed by the ELT connector. order, order_tag, order_line_items, customer and transaction follow the connector's documented schema; refund and order_line_refund are assumed names."
     schema: shopify
     quoting:
       identifier: true
@@ -32,7 +32,8 @@ sources:
                   config:
                     severity: warn
                     where: "source_identifier is not null"
-      - name: order_line
+      - name: order_tag
+      - name: order_line_items
       - name: refund
       - name: order_line_refund
       - name: transaction

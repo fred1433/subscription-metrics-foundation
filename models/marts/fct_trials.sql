@@ -29,7 +29,7 @@ base as (
         a.referred_by_account_id is not null as is_referred,
         l.customer_key,
         f.first_box_paid_at_utc,
-        {{ dbt.dateadd('day', var('trial_conversion_window_days'), 't.trial_at_utc') }} as window_end_at_utc,
+        {{ ts_add_days('t.trial_at_utc', var('trial_conversion_window_days')) }} as window_end_at_utc,
         c.subscription_id is not null as cancelled_before_first_box
     from trials as t
     inner join {{ ref('stg_platform__subscriptions') }} as s on s.subscription_id = t.subscription_id

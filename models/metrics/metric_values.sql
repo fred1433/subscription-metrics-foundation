@@ -106,8 +106,8 @@ select
     u.numerator,
     u.denominator,
     case
-        when r.aggregation = 'ratio_of_sums' then 1.0 * u.numerator / nullif(u.denominator, 0)
-        else 1.0 * u.numerator
+        when r.aggregation = 'ratio_of_sums' then cast(u.numerator as {{ type_double() }}) / nullif(u.denominator, 0)
+        else cast(u.numerator as {{ type_double() }})
     end as value,
     u.group_size,
     u.pending_count,

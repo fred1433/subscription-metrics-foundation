@@ -1,7 +1,7 @@
 -- rows the connector delivered more than once for the same full source key
 select
     'ad_spend' as check_name,
-    platform || '|' || account_id || '|' || campaign_id || '|' || date as item_key,
+    platform || '|' || account_id || '|' || campaign_id || '|' || cast(date as {{ dbt.type_string() }}) as item_key,
     'duplicate_connector_row' as category,
     'exception' as classification,
     (count(*) - 1) * max({{ to_pence('spend') }}) as amount_pence,

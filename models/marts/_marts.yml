@@ -58,7 +58,7 @@ models:
         data_tests:
           - accepted_values:
               arguments:
-                values: [active, payment_retry, trial_pending_first_box, paused, cancelled]
+                values: [active, payment_retry, trial_pending_first_box, paused, cancelled, lapsed]
 
   - name: fct_ad_spend_daily
     description: "Daily spend per campaign, deduplicated on the full source key."

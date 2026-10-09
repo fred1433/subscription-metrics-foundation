@@ -8,13 +8,22 @@ What it cannot do:
   run SQL, name a table or a column, see a row about a person, see a cell below the minimum group size,
   or get a number from a source that is stale at the cutoff.
 
-Disclosure guardrails (this file): aggregates only, allow-listed slices, minimum group size, bounded ranges,
-read-only connection, call log. Access control (who may call at all) belongs to the deployment: in BigQuery,
+Disclosure guardrails (this file): aggregates only, allow-listed slices, minimum group size with
+complementary suppression, bounded ranges, read-only connection, call log (no log, no answer). Access control (who may call at all) belongs to the deployment: in BigQuery,
 a service account that can only read the metrics dataset. Not implemented here.
 
 The server computes nothing. Values come from main_metrics.metric_values, built by dbt. The only combination
 it performs is the registry's own rule for a range total, executed in SQL: sum of numerators over sum of
 denominators for ratios, a sum for sums, none for point-in-time metrics.
+
+Suppression, so that no hidden cell can be recovered by subtraction:
+  primary        a cell whose group is smaller than the metric's minimum is hidden (value, numerator,
+                 denominator, pending)
+  complementary  in a split query, if a period has exactly one hidden cell, the smallest remaining cell of
+                 that period is hidden too, so "total minus visible cells" only ever gives a sum of two or
+                 more hidden cells
+  range totals   only on the 'total' slice, and only when no month of the range is hidden; a split query
+                 returns no range total (ask for slice_by='total')
 """
 from __future__ import annotations
 
@@ -44,12 +53,8 @@ SQL_REGISTRY = """
     left join main_metrics.metric_quality as q on q.metric_id = r.metric_id
 """
 SQL_ROWS = """
-    select cast(period as varchar), slice_value,
-           case when group_size >= ? then numerator end,
-           case when group_size >= ? then denominator end,
-           case when group_size >= ? then value end,
-           group_size >= ? as published,
-           case when pending_count >= ? then pending_count end
+    select cast(period as varchar), slice_value, numerator, denominator, cast(value as double),
+           group_size, pending_count
     from main_metrics.metric_values
     where metric_id = ? and slice_name = ? and period between ? and ?
     order by period, slice_value
@@ -57,12 +62,13 @@ SQL_ROWS = """
 """
 SQL_TOTAL = {
     "ratio_of_sums": """
-        select sum(numerator), sum(denominator), 1.0 * sum(numerator) / nullif(sum(denominator), 0),
-               sum(group_size), sum(pending_count)
+        select sum(numerator), sum(denominator),
+               cast(sum(numerator) as double) / nullif(sum(denominator), 0),
+               min(group_size), sum(pending_count)
         from main_metrics.metric_values
         where metric_id = ? and slice_name = 'total' and period between ? and ?""",
     "sum": """
-        select sum(numerator), null, 1.0 * sum(numerator), sum(group_size), null
+        select sum(numerator), null, cast(sum(numerator) as double), min(group_size), null
         from main_metrics.metric_values
         where metric_id = ? and slice_name = 'total' and period between ? and ?""",
 }
@@ -78,11 +84,41 @@ server = MCPServer(
 
 
 def _log(tool: str, args: dict, outcome: str, detail: str = "", rows: int = 0) -> None:
-    os.makedirs(os.path.dirname(os.path.abspath(CALL_LOG)), exist_ok=True)
     entry = {"at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), "tool": tool, "args": args,
              "outcome": outcome, "detail": detail, "rows": rows}
-    with open(CALL_LOG, "a") as f:
-        f.write(json.dumps(entry) + "\n")
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(CALL_LOG)), exist_ok=True)
+        with open(CALL_LOG, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError as exc:
+        # every answer must be logged: no log, no answer, and the caller is told why
+        raise ToolError(f"call log {CALL_LOG} is not writable ({exc.strerror}); refusing to answer") from exc
+
+
+def _suppress(rows: list[tuple], g: int, split: bool) -> list[dict]:
+    """Primary suppression below g, then complementary suppression per period for split queries."""
+    cells = [{"period": p, "slice_value": sv, "numerator": n, "denominator": d, "value": v, "group": gs,
+              "pending": pend, "published": gs is not None and gs >= g} for p, sv, n, d, v, gs, pend in rows]
+    if split:
+        by_period: dict[str, list[dict]] = {}
+        for c in cells:
+            by_period.setdefault(c["period"], []).append(c)
+        for group in by_period.values():
+            hidden = [c for c in group if not c["published"]]
+            visible = [c for c in group if c["published"]]
+            if len(hidden) == 1 and visible:
+                min(visible, key=lambda c: (c["group"], c["slice_value"]))["published"] = False
+    out = []
+    for c in cells:
+        shown = c["published"]
+        # pending counts are only given on the unsplit series: a split pending column could be differenced
+        pending = None if split else (c["pending"] if shown and (c["pending"] in (None, 0) or c["pending"] >= g) else None)
+        out.append({"period": c["period"], "slice_value": c["slice_value"],
+                    "numerator": c["numerator"] if shown else None,
+                    "denominator": c["denominator"] if shown else None,
+                    "value": float(c["value"]) if shown and c["value"] is not None else None,
+                    "published": shown, "pending": pending})
+    return out
 
 
 def _refuse(tool: str, args: dict, reason: str):
@@ -177,20 +213,24 @@ def query_metric(metric_id: str, start_month: str, end_month: str, slice_by: str
     con = duckdb.connect(DB_PATH, read_only=True)
     try:
         g = m["min_group_size"]
-        rows = con.execute(SQL_ROWS, [g, g, g, g, g, metric_id, slice_by, start, end, MAX_ROWS + 1]).fetchall()
+        rows = con.execute(SQL_ROWS, [metric_id, slice_by, start, end, MAX_ROWS + 1]).fetchall()
         if len(rows) > MAX_ROWS:
             _refuse("query_metric", args, f"more than {MAX_ROWS} rows; narrow the range")
+        out_rows = _suppress(rows, g, split=slice_by != "total")
         total = None
-        if m["aggregation"] in SQL_TOTAL:
+        if slice_by != "total":
+            total = {"published": False, "reason": "no range total on a split query; ask for slice_by='total'"}
+        elif m["aggregation"] in SQL_TOTAL:
             t = con.execute(SQL_TOTAL[m["aggregation"]], [metric_id, start, end]).fetchone()
-            published = t[3] is not None and t[3] >= g
+            published = bool(out_rows) and all(r["published"] for r in out_rows) and t[3] is not None and t[3] >= g
             total = {"numerator": t[0] if published else None, "denominator": t[1] if published else None,
-                     "value": t[2] if published else None, "published": published,
-                     "pending": t[4], "rule": m["aggregation"]}
+                     "value": float(t[2]) if published and t[2] is not None else None, "published": published,
+                     "pending": t[4] if published and (t[4] is None or t[4] == 0 or t[4] >= g) else None,
+                     "rule": m["aggregation"]}
+            if not published:
+                total["reason"] = "a month in this range is below the minimum group size"
     finally:
         con.close()
-    out_rows = [{"period": r[0], "slice_value": r[1], "numerator": r[2], "denominator": r[3], "value": r[4],
-                 "published": r[5], "pending": r[6]} for r in rows]
     _log("query_metric", args, "ok", rows=len(out_rows))
     return {**base, "status": "ok", "rows": out_rows, "range_total": total}
 

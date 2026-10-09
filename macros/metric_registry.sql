@@ -55,7 +55,7 @@ metrics:
     version: 1
     status: implemented
     label: Active paying subscriptions at month end
-    definition: "Subscriptions whose first box has been paid and whose state at the end of the month, as known that day, is active or in payment retry; paused, cancelled and trial-only subscriptions are excluded."
+    definition: "Subscriptions whose first box has been paid and whose state at the end of the month, as known that day, is active or in payment retry; paused, cancelled, lapsed (renewal more than 35 days overdue) and trial-only subscriptions are excluded."
     grain: month end (Europe/London), or the cutoff date for the current month
     numerator: subscriptions in state active or payment_retry
     denominator: none

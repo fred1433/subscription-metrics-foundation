@@ -51,7 +51,7 @@ def test_refresh_sequence(work, tmp_path):
     con = duckdb.connect(db)
     for table, where in [
         ('shopify."order"', "created_at >= '2026-09-23'"),
-        ("shopify.order_line", "order_id in (select id from shopify.\"order\" where created_at >= '2026-09-23')"),
+        ("shopify.order_line_items", "order_id in (select id from shopify.\"order\" where created_at >= '2026-09-23')"),
         ("shopify.\"transaction\"", "created_at >= '2026-09-23'"),
     ]:
         con.execute(f"insert into {table} select * replace ('2026-09-30T20:10:00Z' as _weld_synced) "
@@ -63,7 +63,7 @@ def test_refresh_sequence(work, tmp_path):
     # 2. a late refund on an August box, paid on 30/09, delivered twice by the connector
     con = duckdb.connect(db)
     order_id, line_id, price = con.execute("""
-        select o.id, l.id, l.price from shopify."order" o join shopify.order_line l on l.order_id = o.id
+        select o.id, l.id, l.price from shopify."order" o join shopify.order_line_items l on l.order_id = o.id
         where o.source_identifier = 'PO-F1-B10' order by l.id limit 1""").fetchone()
     amount = round(float(price) * 100)
     for synced in ["2026-09-30T20:15:00Z", "2026-09-30T20:40:00Z"]:

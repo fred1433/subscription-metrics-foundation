@@ -11,7 +11,10 @@ item_totals as (
         check_name,
         sum(case when classification = 'explained' then amount_pence else 0 end) as explained_pence,
         sum(case when classification = 'explained' then order_count_delta else 0 end) as explained_count,
-        sum(case when classification = 'exception' then 1 else 0 end) as exceptions
+        sum(case when classification = 'exception' then 1 else 0 end) as exceptions,
+        -- gross unexplained: exceptions that are part of the gap, counted without letting them offset
+        sum(case when classification = 'exception' and check_name = 'completeness' then abs(amount_pence) else 0 end)
+            as unexplained_gross_pence
     from items
     group by check_name
 ),
@@ -100,6 +103,11 @@ select
           end
         + case when c.check_name = 'gross_to_net' then (select bridge_residual from bridge) else 0 end
         as unexplained,
+    case
+        when c.check_name = 'completeness' then coalesce(t.unexplained_gross_pence, 0)
+        else abs((c.warehouse_value - c.source_value)
+                 - case when c.unit = 'orders' then coalesce(t.explained_count, 0) else 0 end)
+    end as unexplained_gross,
     coalesce(t.exceptions, 0) as exceptions,
     case
         when coalesce(t.exceptions, 0) = 0

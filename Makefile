@@ -4,7 +4,7 @@ VENV   ?= .venv
 PY     ?= $(VENV)/bin/python
 DBT    ?= $(VENV)/bin/dbt
 
-.PHONY: all setup ci clean defective scenario-% test readme readme-check
+.PHONY: all setup ci clean defective scenario-% test readme readme-check bigquery-compile
 
 all: setup ci
 
@@ -31,3 +31,9 @@ readme:
 
 readme-check:
 	$(PY) scripts/readme_results.py --check
+
+# Compile for BigQuery with a fake project and no connection, then check the SQL statically.
+# Needs: pip install -r requirements-bigquery.txt
+bigquery-compile:
+	$(DBT) compile --profiles-dir ci --target-path target/bigquery --no-populate-cache --no-introspect --quiet
+	$(PY) ci/check_bigquery_sql.py

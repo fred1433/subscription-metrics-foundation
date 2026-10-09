@@ -1,6 +1,6 @@
 with ranked as (
     select *, row_number() over (partition by id order by _weld_synced desc) as rn
-    from {{ source('shopify', 'order_line') }}
+    from {{ source('shopify', 'order_line_items') }}
 )
 select
     {{ to_int('id') }} as order_line_id,

@@ -4,7 +4,7 @@ with raw_trials as (
     select count(*) as n
     from {{ ref('stg_platform__subscription_events') }}
     where event_type = 'trial_purchased'
-      and {{ dbt.dateadd('day', var('trial_conversion_window_days'), 'event_at_utc') }} <= {{ as_of() }}
+      and {{ ts_add_days('event_at_utc', var('trial_conversion_window_days')) }} <= {{ as_of() }}
 ),
 served as (
     select sum(denominator) as n

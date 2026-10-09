@@ -9,6 +9,24 @@
 {% macro default__london_date(ts) %}date({{ ts }}, 'Europe/London'){% endmacro %}
 {% macro duckdb__london_date(ts) %}cast(timezone('Europe/London', cast({{ ts }} as timestamptz)) as date){% endmacro %}
 
+{# Timestamp and date arithmetic that keeps the type: dbt.dateadd returns DATETIME on BigQuery,
+   which cannot be compared with a TIMESTAMP. #}
+{% macro ts_add_days(ts, n) %}{{ return(adapter.dispatch('ts_add_days')(ts, n)) }}{% endmacro %}
+{% macro default__ts_add_days(ts, n) %}timestamp_add({{ ts }}, interval {{ n }} day){% endmacro %}
+{% macro duckdb__ts_add_days(ts, n) %}({{ ts }} + to_days(cast({{ n }} as integer))){% endmacro %}
+
+{% macro ts_add_hours(ts, n) %}{{ return(adapter.dispatch('ts_add_hours')(ts, n)) }}{% endmacro %}
+{% macro default__ts_add_hours(ts, n) %}timestamp_add({{ ts }}, interval {{ n }} hour){% endmacro %}
+{% macro duckdb__ts_add_hours(ts, n) %}({{ ts }} + to_hours(cast({{ n }} as integer))){% endmacro %}
+
+{% macro date_add_days(d, n) %}{{ return(adapter.dispatch('date_add_days')(d, n)) }}{% endmacro %}
+{% macro default__date_add_days(d, n) %}date_add({{ d }}, interval {{ n }} day){% endmacro %}
+{% macro duckdb__date_add_days(d, n) %}cast({{ d }} + to_days(cast({{ n }} as integer)) as date){% endmacro %}
+
+{% macro type_double() %}{{ return(adapter.dispatch('type_double')()) }}{% endmacro %}
+{% macro default__type_double() %}float64{% endmacro %}
+{% macro duckdb__type_double() %}double{% endmacro %}
+
 {% macro month_start(d) %}cast({{ dbt.date_trunc('month', d) }} as date){% endmacro %}
 
 {% macro day_series(start_date, end_date) %}{{ return(adapter.dispatch('day_series')(start_date, end_date)) }}{% endmacro %}
