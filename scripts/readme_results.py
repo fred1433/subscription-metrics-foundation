@@ -38,7 +38,7 @@ CATEGORY = {
 def gbp(p):
     if p is None:
         return ""
-    sign = "-" if p < 0 else ""
+    sign = "-\u2060" if p < 0 else ""   # word joiner: the minus never wraps away from the amount
     return f"{sign}£{abs(p) / 100:,.2f}"
 
 

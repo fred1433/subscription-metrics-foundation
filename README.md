@@ -8,7 +8,7 @@ This example keeps three misreadings out of a subscription business's numbers: c
 **What the run shows** (synthetic data, every figure produced by the build):
 
 - A first box moved to day 20 and paid after a failed charge stays pending: `trial_pending_first_box` on day 19, `payment_retry` on day 21 (not churn), `active` on day 23, the conversion day.
-- Gaps carry names, not just totals: the completeness gap is pinned to `PO-D1-B2` (-£29.00), `PO-D2-B1` (£54.00), `PO-D3-B1` (-£3.50).
+- Gaps carry names, not just totals: the completeness gap is pinned to `PO-D1-B2` (-⁠£29.00), `PO-D2-B1` (£54.00), `PO-D3-B1` (-⁠£3.50).
 - Same number twice: trial conversion April 2025 to July 2026 is 232/381 through the report query and 232/381 through the MCP server.
 <!-- /generated:proof -->
 
@@ -73,12 +73,12 @@ Window: 42 days from the trial (a demo policy, to be agreed). Cutoff: 2026-09-30
 Defective scenario: the clean data plus six named faults (an order that never landed, a double push, a discount applied twice on the way in, a duplicated ad-spend row, a second trial from the same household, an email alias). Six separate checks; nothing is netted across them.
 
 <!-- generated:reconciliation -->
-**In short:** the warehouse holds £32.50 less than the subscription platform charged. One order worth £54.00 was paid within the 6-hour arrival tolerance and not landed yet (explained). The rest is pinned to 3 named orders (`PO-D1-B2` -£29.00 never landed; `PO-D2-B1` £54.00 pushed twice; `PO-D3-B1` -£3.50 landed too low): £21.50 net, £86.50 gross, because a duplicate must not hide a missing order. Orders, Lines to order, Order to cash, Ad spend, Trials close with nothing unexplained; their exceptions are flagged, not money missing.
+**In short:** the warehouse holds £32.50 less than the subscription platform charged. One order worth £54.00 was paid within the 6-hour arrival tolerance and not landed yet (explained). The rest is pinned to 3 named orders (`PO-D1-B2` -⁠£29.00 never landed; `PO-D2-B1` £54.00 pushed twice; `PO-D3-B1` -⁠£3.50 landed too low): £21.50 net, £86.50 gross, because a duplicate must not hide a missing order. Orders, Lines to order, Order to cash, Ad spend, Trials close with nothing unexplained; their exceptions are flagged, not money missing.
 
 | Check | Source | Warehouse | Gap | Unexplained, net | Unexplained, gross | Exceptions |
 |---|---|---|---|---|---|---|
 | Orders | 2,223 | 2,222 | -1 | 0 | 0 | 0 |
-| Completeness | £90,006.10 | £89,973.60 | -£32.50 | £21.50 | £86.50 | 3 |
+| Completeness | £90,006.10 | £89,973.60 | -⁠£32.50 | £21.50 | £86.50 | 3 |
 | Lines to order | £91,019.10 | £91,019.10 | £0.00 | £0.00 | £0.00 | 0 |
 | Order to cash | £90,705.35 | £90,705.35 | £0.00 | £0.00 | £0.00 | 0 |
 | Ad spend | £16,229.29 | £16,229.29 | £0.00 | £0.00 | £0.00 | 1 |
@@ -89,12 +89,12 @@ Gap is warehouse minus source. Line by line: for completeness items the amount i
 |  | Item | What it is | Amount | Effect |
 |---|---|---|---|---|
 | **exception** | `meta\|act_meta_1\|cmp_meta_prospecting\|2026-08-14` | same campaign-day delivered twice by the connector | £10.28 | removed in staging |
-| **exception** | `PO-D1-B2` | paid in the platform, never landed | -£29.00 | missing from the warehouse |
+| **exception** | `PO-D1-B2` | paid in the platform, never landed | -⁠£29.00 | missing from the warehouse |
 | **exception** | `PO-D2-B1` | one paid order pushed twice | £54.00 | in the warehouse twice |
-| **exception** | `PO-D3-B1` | landed total differs from the charge | -£3.50 | in the warehouse, wrong amount |
+| **exception** | `PO-D3-B1` | landed total differs from the charge | -⁠£3.50 | in the warehouse, wrong amount |
 | **exception** | `PO-F3B-T` | second trial, same card and address: sale kept, flagged | £7.00 | in the warehouse, flagged only |
 | explained | `PO-F10-S` | renewal due today, not charged yet: not missing revenue |  | not revenue yet |
-| explained | `PO-F9-X1` | paid shortly before the cutoff, still in transit | -£54.00 | not in the warehouse yet |
+| explained | `PO-F9-X1` | paid shortly before the cutoff, still in transit | -⁠£54.00 | not in the warehouse yet |
 | explained | `PO-J-BLANK` | blank order created by a card update (motif, not amount) |  | in the warehouse, out of order counts |
 | explained | `PO-F6-R1` | free replacement: kept, it shipped and has a cost |  | in the warehouse, kept |
 | explained | `PO-J-BLANK` | blank order created by a card update (motif, not amount) |  | in the warehouse, out of order counts |
