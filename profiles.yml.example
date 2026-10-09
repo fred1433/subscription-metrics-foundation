@@ -1,0 +1,13 @@
+# BigQuery target (not executed in this repository: DuckDB-tested; BigQuery execution not yet tested).
+# Copy to ~/.dbt/profiles.yml and point the sources at the datasets Weld writes to.
+subscription_metrics:
+  target: bigquery
+  outputs:
+    bigquery:
+      type: bigquery
+      method: oauth            # or service-account with a key file
+      project: your-gcp-project
+      dataset: analytics
+      location: europe-west2
+      threads: 8
+      job_execution_timeout_seconds: 300

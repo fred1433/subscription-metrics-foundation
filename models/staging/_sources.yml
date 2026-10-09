@@ -1,0 +1,58 @@
+version: 2
+
+sources:
+  - name: platform
+    description: "In-house subscription platform. Table and column names are assumptions to be replaced by the real ones during discovery."
+    schema: platform
+    tables:
+      - name: accounts
+        description: "One row per platform account. shopify_customer_id and payment_fingerprint are assumed fields."
+      - name: account_email_history
+      - name: subscriptions
+      - name: subscription_events
+        description: "Lifecycle events with event time and ingestion time kept apart."
+      - name: orders
+        description: "Every order the platform knows, including blank and scheduled ones, with an explicit kind and motif."
+      - name: payment_transactions
+        description: "Charges, failed charges and card checks (the 73p check and its reversal). Representation assumed."
+
+  - name: shopify
+    description: "Shopify as landed by the ELT connector. order, customer and transaction follow the connector's documented schema; order_line, refund and order_line_refund are assumed names."
+    schema: shopify
+    quoting:
+      identifier: true
+    tables:
+      - name: customer
+      - name: order
+        columns:
+          - name: source_identifier
+            data_tests:
+              - unique:
+                  name: source_shopify_one_order_per_platform_order
+                  config:
+                    severity: warn
+                    where: "source_identifier is not null"
+      - name: order_line
+      - name: refund
+      - name: order_line_refund
+      - name: transaction
+
+  - name: ads
+    description: "Daily spend per campaign, reported on Europe/London dates by the ad accounts."
+    schema: ads
+    tables:
+      - name: daily_spend
+        data_tests:
+          - unique_combination:
+              name: source_ads_one_row_per_campaign_day
+              arguments:
+                columns: [platform, account_id, campaign_id, date]
+              config:
+                severity: warn
+
+  - name: source_export
+    description: "Independent exports from the systems of record, taken before the landing layer; used only to reconcile."
+    schema: source_export
+    tables:
+      - name: platform_paid_orders
+      - name: ads_platform_daily_totals

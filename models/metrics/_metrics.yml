@@ -1,0 +1,18 @@
+version: 2
+
+models:
+  - name: metric_registry
+    description: "Materialised metric registry: id, version, definition, grain, numerator, denominator, slices, minimum group size, maturity, dependencies."
+    columns:
+      - name: metric_id
+        data_tests: [unique, not_null]
+  - name: metric_values
+    description: "Pre-aggregated values per metric, month and allowed slice; the only table the MCP server reads values from. No personal data."
+    data_tests:
+      - unique_combination:
+          arguments:
+            columns: [metric_id, period, slice_name, slice_value]
+  - name: metric_quality
+    description: "Availability of each metric at the cutoff: unavailable when a source it depends on is stale."
+  - name: source_freshness
+    description: "Last sync per source against the fixed clock and its tolerated age."

@@ -1,0 +1,10 @@
+# Local, zero-cost target. DBT_DUCKDB_PATH picks the scenario database.
+subscription_metrics:
+  target: duckdb
+  outputs:
+    duckdb:
+      type: duckdb
+      path: "{{ env_var('DBT_DUCKDB_PATH', 'warehouse/defective.duckdb') }}"
+      threads: 4
+      settings:
+        TimeZone: UTC

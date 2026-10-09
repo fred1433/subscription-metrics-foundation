@@ -1,0 +1,10 @@
+version: 2
+
+models:
+  - name: rec_summary
+    description: "Five separate checks: order count, completeness, gross to net, ad spend, trial eligibility."
+    columns:
+      - name: check_name
+        data_tests: [unique, not_null]
+  - name: rec_exceptions
+    description: "Every item that explains or breaks a check, with its category and amount (warehouse minus source)."

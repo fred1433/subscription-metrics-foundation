@@ -1,0 +1,68 @@
+version: 2
+
+models:
+  - name: dim_customers
+    description: "One row per customer. Two source records are one customer only through an explicit cross-reference, never through an email."
+    columns:
+      - name: customer_key
+        data_tests: [unique, not_null]
+      - name: link_rule
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [xref_platform_to_shopify, unlinked_platform_account, shopify_only]
+
+  - name: fct_orders
+    description: "One row per Shopify order, with its kind and motif from the platform; blank orders are kept but are not commercial."
+    columns:
+      - name: order_key
+        data_tests: [unique, not_null]
+      - name: customer_key
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_customers')
+                field: customer_key
+      - name: order_kind
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [trial, subscription_box, replacement, blank_payment_update, one_off, subscription_unmatched]
+      - name: currency
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [GBP]
+
+  - name: fct_revenue_movements
+    description: "Sales on the order date and refunds on the date the money left, in pence."
+    columns:
+      - name: movement_id
+        data_tests: [unique, not_null]
+
+  - name: fct_trials
+    description: "One row per paid trial with its 42-day conversion window and the eligibility review result."
+    columns:
+      - name: trial_order_id
+        data_tests: [unique, not_null]
+
+  - name: fct_subscription_state_daily
+    description: "State of each subscription on each day as known that day; moved renewal dates and payment retries are not churn."
+    data_tests:
+      - unique_combination:
+          arguments:
+            columns: [subscription_id, state_date]
+    columns:
+      - name: subscription_state
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [active, payment_retry, trial_pending_first_box, paused, cancelled]
+
+  - name: fct_ad_spend_daily
+    description: "Daily spend per campaign, deduplicated on the full source key."
+    data_tests:
+      - unique_combination:
+          arguments:
+            columns: [platform, account_id, campaign_id, spend_date_london]

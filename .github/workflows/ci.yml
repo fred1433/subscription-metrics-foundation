@@ -1,0 +1,24 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -r requirements.txt
+      - name: Clean scenario, defective scenario, harness, MCP and refresh tests, README figures
+        run: make ci PY=python DBT=dbt
+      - name: MCP call log
+        if: always()
+        run: cat logs/mcp_calls.jsonl 2>/dev/null | tail -20 || true

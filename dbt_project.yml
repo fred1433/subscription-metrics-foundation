@@ -1,0 +1,35 @@
+name: subscription_metrics
+version: "1.0.0"
+config-version: 2
+profile: subscription_metrics
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+analysis-paths: ["analyses"]
+target-path: "target"
+
+vars:
+  # the fixed clock: every "as known at" decision uses it, so a rebuild is reproducible
+  as_of: "2026-09-30 21:00:00"
+  trial_conversion_window_days: 42      # demo policy, to be agreed
+  arrival_tolerance_hours: 6            # a paid order younger than this may not have landed yet
+  payment_retry_days: 30                # public terms, clause 7.6
+
+models:
+  subscription_metrics:
+    staging:
+      +materialized: view
+      +schema: staging
+    intermediate:
+      +materialized: table
+      +schema: intermediate
+    marts:
+      +materialized: table
+      +schema: marts
+    reconciliation:
+      +materialized: table
+      +schema: reconciliation
+    metrics:
+      +materialized: table
+      +schema: metrics
