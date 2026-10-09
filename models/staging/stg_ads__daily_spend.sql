@@ -7,6 +7,7 @@ with ranked as (
             order by _synced_at desc
         ) as rn
     from {{ source('ads', 'daily_spend') }}
+    where {{ utc_timestamp('_synced_at') }} <= {{ as_of() }}
 )
 select
     platform,

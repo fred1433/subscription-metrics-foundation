@@ -8,6 +8,6 @@ from (
 where net <> 0
 union all
 select 'journey card check not listed as reversed'
-from (select count(*) as n from {{ ref('rec_gross_to_net') }}
+from (select count(*) as n from {{ ref('rec_order_total_to_cash') }}
       where item_key = 'ACC-J:card_check:2026-06-07' and category = 'card_check_reversed') as y
 where n <> 1

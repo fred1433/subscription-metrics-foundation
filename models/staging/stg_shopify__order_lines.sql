@@ -1,6 +1,8 @@
 with ranked as (
     select *, row_number() over (partition by id order by _weld_synced desc) as rn
     from {{ source('shopify', 'order_line_items') }}
+    -- known at the cutoff: a version synced after it does not exist yet, older versions stay admissible
+    where {{ utc_timestamp('_weld_synced') }} <= {{ as_of() }}
 )
 select
     {{ to_int('id') }} as order_line_id,

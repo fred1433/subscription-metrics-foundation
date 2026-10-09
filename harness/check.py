@@ -5,7 +5,8 @@ For a scenario it compares
      (and fails on any test that ended in fail or error),
   2. every reconciliation item (check, key, category, classification, amount) with <scenario>_items.csv,
   3. the identity review queue with <scenario>_identity_candidates.csv.
-A missed anomaly, an extra one or a misclassified one fails the run.
+Items are compared as occurrences with their count (a multiset), so a second occurrence of the same key
+fails unless it is expected. A missed anomaly, an extra one or a misclassified one fails the run.
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ import csv
 import json
 import os
 import sys
+from collections import Counter
 
 import duckdb
 
@@ -22,8 +24,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 def load_expected(scenario: str, expected_dir: str = os.path.join(HERE, "expected")):
     with open(os.path.join(expected_dir, f"{scenario}_items.csv")) as f:
-        items = {(r["check_name"], r["item_key"]): (r["category"], r["classification"], int(r["amount_pence"]))
-                 for r in csv.DictReader(f)}
+        items = Counter((r["check_name"], r["item_key"], r["category"], r["classification"], int(r["amount_pence"]))
+                        for r in csv.DictReader(f))
     with open(os.path.join(expected_dir, f"{scenario}_identity_candidates.csv")) as f:
         cands = {(r["customer_key_a"], r["customer_key_b"], r["matched_on"]) for r in csv.DictReader(f)}
     with open(os.path.join(expected_dir, f"{scenario}_warnings.txt")) as f:
@@ -33,9 +35,9 @@ def load_expected(scenario: str, expected_dir: str = os.path.join(HERE, "expecte
 
 def observed(db: str, run_results: str):
     con = duckdb.connect(db, read_only=True)
-    items = {(r[0], r[1]): (r[2], r[3], int(r[4])) for r in con.execute(
+    items = Counter((r[0], r[1], r[2], r[3], int(r[4])) for r in con.execute(
         "select check_name, item_key, category, classification, amount_pence "
-        "from main_reconciliation.rec_exceptions").fetchall()}
+        "from main_reconciliation.rec_exceptions").fetchall())
     cands = {tuple(r) for r in con.execute(
         "select customer_key_a, customer_key_b, matched_on from main_intermediate.int_identity_candidates").fetchall()}
     con.close()
@@ -59,13 +61,17 @@ def compare(expected, seen) -> list[str]:
     e_items, e_cands, e_warns = expected
     o_items, o_cands, o_warns, broken = seen
     problems = [f"test or model did not pass: {b}" for b in broken]
-    for k in sorted(e_items.keys() - o_items.keys()):
-        problems.append(f"MISSED   {k[0]} {k[1]} expected {e_items[k]}")
-    for k in sorted(o_items.keys() - e_items.keys()):
-        problems.append(f"EXTRA    {k[0]} {k[1]} found {o_items[k]}")
-    for k in sorted(e_items.keys() & o_items.keys()):
-        if e_items[k] != o_items[k]:
-            problems.append(f"WRONG    {k[0]} {k[1]} expected {e_items[k]} found {o_items[k]}")
+    missing = Counter(e_items) - Counter(o_items)
+    extra = Counter(o_items) - Counter(e_items)
+    for m in sorted(missing.elements()):
+        twin = next((x for x in extra.elements() if x[:2] == m[:2]), None)
+        if twin is not None:
+            problems.append(f"WRONG    {m[0]} {m[1]} expected {m[2:]} found {twin[2:]}")
+            extra[twin] -= 1
+        else:
+            problems.append(f"MISSED   {m[0]} {m[1]} expected {m[2:]}")
+    for x in sorted((+extra).elements()):
+        problems.append(f"EXTRA    {x[0]} {x[1]} found {x[2:]}")
     for c in sorted(e_cands - o_cands):
         problems.append(f"MISSED   identity candidate {c}")
     for c in sorted(o_cands - e_cands):
@@ -86,7 +92,7 @@ def main(argv=None) -> int:
     expected = load_expected(a.scenario)
     seen = observed(a.db, a.run_results)
     problems = compare(expected, seen)
-    n_items, n_warn = len(expected[0]), len(expected[2])
+    n_items, n_warn = sum(expected[0].values()), len(expected[2])
     if problems:
         print(f"[{a.scenario}] harness FAILED")
         for p in problems:

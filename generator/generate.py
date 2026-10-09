@@ -530,6 +530,41 @@ def build_fixtures(w: World, scenario: str):
     w.regular("SUB-F11", "F11", w.trial("SUB-F11", "PO-F11-T", t + dt.timedelta(minutes=2), False),
               until=D("2026-03-20"))                                                # box 10/03, next due 07/04
 
+    # F12 first box fails then is paid: trial 17/04, first box moved to 30/04, fails, paid 08/05.
+    # Not an active PAYING subscription at the end of April, one at the end of May.
+    t = T("2026-04-17T18:00:00")
+    w.account("ACC-F12", "max.ortiz@example.org", t, "6 Tannery Close", "N16 7RT", "fp_f12", 70121)
+    w.subscription("SUB-F12", "ACC-F12", t, 1, 1, 70121, False)
+    w.trial("SUB-F12", "PO-F12-T", t + dt.timedelta(minutes=2), False)
+    w.event("SUB-F12", "renewal_date_changed", T("2026-04-24T20:00:00"), next_renewal=D("2026-04-30"),
+            previous_renewal=D("2026-04-26"))
+    w.event("SUB-F12", "payment_failed", T("2026-04-30T06:00:00"), "PO-F12-B1")
+    w.ptxn("ACC-F12", "PO-F12-B1", "charge", 0, T("2026-04-30T06:00:00"), "failed")
+    w.charge("SUB-F12", "PO-F12-B1", D("2026-04-30"), T("2026-05-08T09:00:00"))
+    w.regular("SUB-F12", "F12", D("2026-05-28"), start_n=2)
+
+    # F13 late ingestion of a pause: pause effective 01/08 but ingested 03/08; resume effective and ingested
+    # 02/08. Ordered by effective date among known events, the subscription is active on 02/08 and 03/08.
+    t = T("2026-06-20T10:00:00")
+    w.account("ACC-F13", "ines.duarte@example.org", t, "19 Saddler Row", "EH7 5QS", "fp_f13", 70131)
+    w.subscription("SUB-F13", "ACC-F13", t, 1, 1, 70131, False)
+    w.regular("SUB-F13", "F13", w.trial("SUB-F13", "PO-F13-T", t + dt.timedelta(minutes=2), False),
+              until=D("2026-07-31"))                                  # boxes 29/06 and 27/07, next 24/08
+    w.event("SUB-F13", "paused", T("2026-08-01T10:00:00"), reason="too_much_food", ingest_delay_min=2 * 24 * 60)
+    w.event("SUB-F13", "resumed", T("2026-08-02T09:00:00"), next_renewal=D("2026-08-24"), ingest_delay_min=5)
+    w.regular("SUB-F13", "F13", D("2026-08-24"), start_n=3)
+
+    # F14 an old payment failure ingested after a newer success must not put the subscription back in retry
+    t = T("2026-05-20T11:00:00")
+    w.account("ACC-F14", "olu.adeyemi@example.org", t, "27 Weaver Street", "M20 2RW", "fp_f14", 70141)
+    w.subscription("SUB-F14", "ACC-F14", t, 1, 1, 70141, False)
+    w.regular("SUB-F14", "F14", w.trial("SUB-F14", "PO-F14-T", t + dt.timedelta(minutes=2), False),
+              until=D("2026-07-20"))                                  # boxes 29/05 and 26/06, next 24/07
+    w.event("SUB-F14", "payment_failed", T("2026-07-24T06:00:00"), "PO-F14-B3", ingest_delay_min=6 * 24 * 60)
+    w.ptxn("ACC-F14", "PO-F14-B3", "charge", 0, T("2026-07-24T06:00:00"), "failed")
+    w.charge("SUB-F14", "PO-F14-B3", D("2026-07-24"), T("2026-07-26T08:00:00"))
+    w.regular("SUB-F14", "F14", D("2026-08-21"), start_n=4)
+
     # D1 to D3: regular subscribers whose orders the defective scenario will damage in the landing layer
     for tag, day, tpd in [("D1", "2026-05-02T10:00:00", 1), ("D2", "2026-06-12T17:00:00", 2),
                           ("D3", "2026-07-03T08:30:00", 1)]:

@@ -1,20 +1,22 @@
+{#- One marker per feed, so a stopped feed cannot hide behind a live one. -#}
 {%- set reg = metric_registry() %}
 with last_seen as (
-    select 'platform' as source_id, max(ingested_at_utc) as last_synced_at_utc
-    from (
-        select ingested_at_utc from {{ ref('stg_platform__subscription_events') }}
-        union all
-        select ingested_at_utc from {{ ref('stg_platform__orders') }}
-    ) as p
+    select 'platform_events' as source_id, max(ingested_at_utc) as last_synced_at_utc
+    from {{ ref('stg_platform__subscription_events') }}
     where ingested_at_utc <= {{ as_of() }}
     union all
-    select 'shopify', max(synced_at_utc)
-    from {{ ref('stg_shopify__orders') }}
-    where synced_at_utc <= {{ as_of() }}
+    select 'platform_orders', max(ingested_at_utc)
+    from {{ ref('stg_platform__orders') }}
     union all
-    select 'ads', max(synced_at_utc)
+    select 'shopify_orders', max(synced_at_utc)
+    from {{ ref('stg_shopify__orders') }}
+    union all
+    select 'shopify_refunds', max(synced_at_utc)
+    from {{ ref('stg_shopify__transactions') }}
+    where kind = 'refund'
+    union all
+    select 'ads_spend', max(synced_at_utc)
     from {{ ref('stg_ads__daily_spend') }}
-    where synced_at_utc <= {{ as_of() }}
 ),
 
 thresholds as (

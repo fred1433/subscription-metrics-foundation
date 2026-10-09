@@ -4,5 +4,5 @@ order_count,PO-F6-R1,zero_price_replacement_kept,explained,0
 completeness,PO-J-BLANK,non_commercial_blank_order,explained,0
 completeness,PO-F9-X1,within_arrival_tolerance,explained,-5400
 completeness,PO-F10-S,scheduled_not_charged,explained,0
-gross_to_net,ACC-J:card_check:2026-06-07,card_check_reversed,explained,73
-gross_to_net,PO-F6-B1:refund:2026-09-30,refund_recorded_not_paid,explained,200
+order_total_to_cash,ACC-J:card_check:2026-06-07,card_check_reversed,explained,73
+order_total_to_cash,PO-F6-B1:refund:2026-09-30,refund_recorded_not_paid,explained,200

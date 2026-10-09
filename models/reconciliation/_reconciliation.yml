@@ -2,9 +2,11 @@ version: 2
 
 models:
   - name: rec_summary
-    description: "Five separate checks: order count, completeness, gross to net, ad spend, trial eligibility."
+    description: "Six separate checks: order count, completeness, lines to order total, order total to cash, ad spend, trial eligibility. difference is warehouse minus source, signed; unexplained is the signed part no explained item covers; unexplained_gross is the same without letting items offset each other (sum of absolute values)."
     columns:
       - name: check_name
         data_tests: [unique, not_null]
   - name: rec_exceptions
-    description: "Every item that explains or breaks a check, with its category and amount (warehouse minus source)."
+    description: "Every item that explains or breaks a check. amount_pence is signed (warehouse minus source) for completeness and lines_to_order_total items; for the other checks it is the amount concerned, and the effect (removed, flagged only, not yet deducted) is given by the category."
+  - name: rec_order_bridge
+    description: "One row per order whose lines minus discounts differ from its total, with the signed residual."

@@ -13,3 +13,4 @@ select
     motif,
     {{ utc_timestamp('_ingested_at') }} as ingested_at_utc
 from {{ source('platform', 'orders') }}
+where {{ utc_timestamp('_ingested_at') }} <= {{ as_of() }}

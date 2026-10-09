@@ -29,11 +29,13 @@ card_checks as (
         c.amount_pence,
         'card verification, never revenue' as note
     from checks as c
-    left join reversals as r on r.parent_transaction_id = c.transaction_id and r.amount_pence = -c.amount_pence
+    -- a reversal counts only if it actually succeeded; a parent id and an opposite amount are not enough
+    left join reversals as r
+        on r.parent_transaction_id = c.transaction_id and r.amount_pence = -c.amount_pence and r.status = 'succeeded'
 )
 
-select 'gross_to_net' as check_name, item_key, category, classification, amount_pence, 0 as order_count_delta, note
+select 'order_total_to_cash' as check_name, item_key, category, classification, amount_pence, 0 as order_count_delta, note
 from pending_refunds
 union all
-select 'gross_to_net', item_key, category, classification, amount_pence, 0, note
+select 'order_total_to_cash', item_key, category, classification, amount_pence, 0, note
 from card_checks

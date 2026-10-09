@@ -64,9 +64,10 @@ EFFECT = {
     "refund_recorded_not_paid": "not deducted yet",
     "duplicate_connector_row": "removed in staging",
     "second_trial_probable_household": "in the warehouse, flagged only",
+    "line_total_mismatch": "order total differs from its lines",
 }
-LABEL = {"order_count": "Orders", "completeness": "Completeness", "gross_to_net": "Gross to net",
-         "ad_spend": "Ad spend", "trial_eligibility": "Trials"}
+LABEL = {"order_count": "Orders", "completeness": "Completeness", "lines_to_order_total": "Lines to order",
+         "order_total_to_cash": "Order to cash", "ad_spend": "Ad spend", "trial_eligibility": "Trials"}
 
 
 def tolerance_hours():
@@ -79,14 +80,15 @@ def block_reconciliation():
     s = con.execute("""select check_name, unit, source_value, warehouse_value, difference, explained,
                               unexplained, unexplained_gross, exceptions from main_reconciliation.rec_summary
                        order by case check_name when 'order_count' then 1 when 'completeness' then 2
-                       when 'gross_to_net' then 3 when 'ad_spend' then 4 else 5 end""").fetchall()
+                       when 'lines_to_order_total' then 3 when 'order_total_to_cash' then 4
+                       when 'ad_spend' then 5 else 6 end""").fetchall()
     items = con.execute("""select check_name, item_key, category, classification, amount_pence
                            from main_reconciliation.rec_exceptions
                            order by case classification when 'exception' then 0 else 1 end, check_name, item_key"""
                         ).fetchall()
     con.close()
     con = duckdb.connect(DB["clean"], read_only=True)
-    clean = con.execute("select count(*), sum(exceptions), sum(abs(unexplained)) "
+    clean = con.execute("select count(*), sum(exceptions), sum(unexplained_gross) "
                         "from main_reconciliation.rec_summary where status = 'pass'").fetchone()
     con.close()
     comp = next(r for r in s if r[0] == "completeness")
@@ -111,7 +113,7 @@ def block_reconciliation():
                  gbp(a) if a else "", EFFECT.get(cat, "")) for c, k, cat, cl, a in items])
     return (lead + t1 + "\n\nGap is warehouse minus source. Line by line: for completeness items the amount is "
             "warehouse minus source; for the others it is the amount involved, and Effect says where it sits.\n\n"
-            + t2 + f"\n\nSame checks on the clean scenario: {clean[0]} of 5 pass, {clean[1]} exceptions, "
+            + t2 + f"\n\nSame checks on the clean scenario: {clean[0]} of 6 pass, {clean[1]} exceptions, "
             f"{gbp(clean[2])} unexplained.")
 
 
@@ -152,10 +154,15 @@ def block_journey():
              "yes" if fb else "no", r.isoformat()) for d, st, fb, r in states]
     return (table(["Day", "Date", "Events that day", "State known that evening", "First box paid", "Next renewal expected"], rows)
             + f"\n\nThe J6 blank order lands as `{blank[0]}`, commercial = {str(blank[1]).lower()}. "
-              "Its 73p card check is reversed and listed in the gross-to-net check.")
+              "Its 73p card check is reversed and listed in the order-to-cash check.")
 
 
-def block_same_number():
+_SAME = {}
+
+
+def same_number():
+    if _SAME:
+        return _SAME["v"]
     sql_path = os.path.join(ROOT, "target", "analyses-defective", "compiled", "subscription_metrics", "analyses",
                             "metabase_trial_conversion.sql")
     with open(sql_path) as f:
@@ -171,6 +178,12 @@ def block_same_number():
                           "slice_by": "postcode"}),
         ("query_metric", {"metric_id": "contribution_margin", "start_month": "2026-01", "end_month": "2026-06"}),
     ])
+    _SAME["v"] = (conv, elig, res)
+    return _SAME["v"]
+
+
+def block_same_number():
+    conv, elig, res = same_number()
     tot = res[0][1]["range_total"]
     t = table(["Path", "Converted", "Trials with a closed window", "Conversion"], [
         ("Report query `analyses/metabase_trial_conversion.sql`", conv, elig, f"{conv / elig:.4%}"),
@@ -194,7 +207,29 @@ def block_runs():
     return table(["Scenario", "Models built", "dbt tests", "Pass", "Warn (expected)", "Fail"], rows)
 
 
-BLOCKS = {"reconciliation": block_reconciliation, "conversion": block_conversion, "journey": block_journey,
+def block_proof():
+    con = duckdb.connect(DB["defective"], read_only=True)
+    st = dict(con.execute("""select cast(state_date as varchar), subscription_state from main_marts.fct_subscription_state_daily
+                             where subscription_id = 'SUB-J' and state_date in ('2026-06-20', '2026-06-22', '2026-06-24')""").fetchall())
+    exc = con.execute("""select item_key, amount_pence from main_reconciliation.rec_exceptions
+                         where check_name = 'completeness' and classification = 'exception' order by item_key""").fetchall()
+    con.close()
+    conv, elig, res = same_number()
+    tot = res[0][1]["range_total"]
+    same = (conv, elig) == (tot["numerator"], tot["denominator"])
+    return "\n".join([
+        "**What the run shows** (synthetic data, every figure produced by the build):",
+        "",
+        f"- A first box moved to day 20 and paid after a failed charge stays pending: `{st['2026-06-20']}` on day 19, "
+        f"`{st['2026-06-22']}` on day 21 (not churn), `{st['2026-06-24']}` on day 23, the conversion day.",
+        "- Gaps carry names, not just totals: the completeness gap is pinned to "
+        + ", ".join(f"`{k}` ({gbp(a)})" for k, a in exc) + ".",
+        f"- Same number twice: trial conversion April 2025 to July 2026 is {conv}/{elig} through the report query and "
+        f"{tot['numerator']}/{tot['denominator']} through the MCP server{'' if same else ' (MISMATCH)'}.",
+    ])
+
+
+BLOCKS = {"proof": block_proof, "reconciliation": block_reconciliation, "conversion": block_conversion, "journey": block_journey,
           "same-number": block_same_number, "runs": block_runs}
 
 

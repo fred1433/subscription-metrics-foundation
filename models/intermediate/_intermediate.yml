@@ -1,0 +1,7 @@
+version: 2
+
+models:
+  - name: int_subscription_state_changes
+    description: "State of a subscription at each moment an event becomes known. Knowledge first (events known by then), effect second (latest effective time per component)."
+    meta:
+      tie_break: "when two known events share the same effective time, the higher event_id wins (source emission order)"

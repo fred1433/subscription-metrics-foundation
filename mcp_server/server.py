@@ -19,9 +19,12 @@ denominators for ratios, a sum for sums, none for point-in-time metrics.
 Suppression, so that no hidden cell can be recovered by subtraction:
   primary        a cell whose group is smaller than the metric's minimum is hidden (value, numerator,
                  denominator, pending)
-  complementary  in a split query, if a period has exactly one hidden cell, the smallest remaining cell of
-                 that period is hidden too, so "total minus visible cells" only ever gives a sum of two or
-                 more hidden cells
+  complementary  in a split query, cells keep being hidden (smallest remaining first) while a period has
+                 exactly one hidden cell OR the union of its hidden cells (total minus visible cells) covers
+                 fewer than min_group_size units; so "total minus visible cells" gives either nothing or an
+                 aggregate of at least min_group_size units
+  scope          this holds inside one answer and one partition; it does not cover cross-metric
+                 combinations, successive releases or outside knowledge
   range totals   only on the 'total' slice, and only when no month of the range is hidden; a split query
                  returns no range total (ask for slice_by='total')
 """
@@ -47,8 +50,9 @@ METRIC_ID = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 SQL_REGISTRY = """
     select r.metric_id, r.version, r.status, r.label, r.definition, r.grain, r.numerator, r.denominator, r.unit,
            r.aggregation, r.allowed_slices_json, r.min_group_size, r.window_days, r.maturity_policy,
-           r.source_dependencies_json, r.missing_inputs_json,
-           q.availability, q.stale_sources, q.open_reconciliation_exceptions, q.checked_at_utc
+           r.source_dependencies_json, r.missing_inputs_json, r.threshold_entity,
+           q.availability, q.stale_sources, q.open_reconciliation_exceptions, q.reconciliation_failures,
+           q.checked_at_utc
     from main_metrics.metric_registry as r
     left join main_metrics.metric_quality as q on q.metric_id = r.metric_id
 """
@@ -95,18 +99,29 @@ def _log(tool: str, args: dict, outcome: str, detail: str = "", rows: int = 0) -
         raise ToolError(f"call log {CALL_LOG} is not writable ({exc.strerror}); refusing to answer") from exc
 
 
+def _refuse(tool: str, argument: str, reason: str):
+    """Refuse without ever echoing the refused value: only the argument name and the reason are logged/returned."""
+    _log(tool, {"refused_argument": argument}, "refused", reason)
+    raise ToolError(f"{argument}: {reason}")
+
+
 def _suppress(rows: list[tuple], g: int, split: bool) -> list[dict]:
-    """Primary suppression below g, then complementary suppression per period for split queries."""
-    cells = [{"period": p, "slice_value": sv, "numerator": n, "denominator": d, "value": v, "group": gs,
+    """Primary suppression below g, then complementary suppression per period for split queries, until the
+    residual (total minus visible cells) is empty or covers at least g units and is never a single cell."""
+    cells = [{"period": p, "slice_value": sv, "numerator": n, "denominator": d, "value": v, "group": gs or 0,
               "pending": pend, "published": gs is not None and gs >= g} for p, sv, n, d, v, gs, pend in rows]
     if split:
         by_period: dict[str, list[dict]] = {}
         for c in cells:
             by_period.setdefault(c["period"], []).append(c)
         for group in by_period.values():
-            hidden = [c for c in group if not c["published"]]
-            visible = [c for c in group if c["published"]]
-            if len(hidden) == 1 and visible:
+            while True:
+                hidden = [c for c in group if not c["published"]]
+                visible = [c for c in group if c["published"]]
+                residual = sum(c["group"] for c in hidden)
+                unsafe = len(hidden) == 1 or (hidden and residual < g)
+                if not unsafe or not visible:
+                    break
                 min(visible, key=lambda c: (c["group"], c["slice_value"]))["published"] = False
     out = []
     for c in cells:
@@ -121,18 +136,13 @@ def _suppress(rows: list[tuple], g: int, split: bool) -> list[dict]:
     return out
 
 
-def _refuse(tool: str, args: dict, reason: str):
-    _log(tool, args, "refused", reason)
-    raise ToolError(reason)
-
-
 def _registry() -> dict[str, dict]:
     con = duckdb.connect(DB_PATH, read_only=True)
     try:
         cols = ["metric_id", "version", "status", "label", "definition", "grain", "numerator", "denominator", "unit",
                 "aggregation", "allowed_slices", "min_group_size", "window_days", "maturity_policy",
-                "source_dependencies", "missing_inputs", "availability", "stale_sources",
-                "open_reconciliation_exceptions", "checked_at_utc"]
+                "source_dependencies", "missing_inputs", "threshold_entity", "availability", "stale_sources",
+                "open_reconciliation_exceptions", "reconciliation_failures", "checked_at_utc"]
         out = {}
         for row in con.execute(SQL_REGISTRY).fetchall():
             d = dict(zip(cols, row))
@@ -153,8 +163,8 @@ def list_metrics() -> dict:
     metrics = []
     for m in reg.values():
         item = {k: m[k] for k in ("metric_id", "version", "status", "label", "definition", "unit", "grain",
-                                  "allowed_slices", "min_group_size", "window_days", "maturity_policy",
-                                  "availability")}
+                                  "allowed_slices", "min_group_size", "threshold_entity", "window_days",
+                                  "maturity_policy", "availability")}
         if m["status"] != "implemented":
             item["missing_inputs"] = m["missing_inputs"]
         metrics.append(item)
@@ -169,27 +179,27 @@ def query_metric(metric_id: str, start_month: str, end_month: str, slice_by: str
     suppressed. Every answer carries the definition version, the window, the cutoff and the quality status."""
     args = {"metric_id": metric_id, "start_month": start_month, "end_month": end_month, "slice_by": slice_by}
     if not isinstance(metric_id, str) or not METRIC_ID.match(metric_id):
-        _refuse("query_metric", args, "metric_id must be a registry id such as 'trial_conversion_rate'")
+        _refuse("query_metric", "metric_id", "not a registry id; call list_metrics for the ids")
     reg = _registry()
     m = reg.get(metric_id)
     if m is None:
-        _refuse("query_metric", args, f"unknown metric '{metric_id}'. Known: {', '.join(sorted(reg))}")
+        _refuse("query_metric", "metric_id", f"unknown metric. Known: {', '.join(sorted(reg))}")
     if m["status"] != "implemented":
-        _refuse("query_metric", args,
+        _refuse("query_metric", "metric_id",
                 f"'{metric_id}' is a contract only, not implemented: missing inputs: {'; '.join(m['missing_inputs'])}")
     if slice_by not in m["allowed_slices"]:
-        _refuse("query_metric", args,
-                f"slice '{slice_by}' is not allowed for '{metric_id}'. Allowed: {', '.join(m['allowed_slices'])}")
-    for v in (start_month, end_month):
+        _refuse("query_metric", "slice_by",
+                f"not allowed for '{metric_id}'. Allowed: {', '.join(m['allowed_slices'])}")
+    for name, v in (("start_month", start_month), ("end_month", end_month)):
         if not isinstance(v, str) or not MONTH.match(v):
-            _refuse("query_metric", args, "months must be written YYYY-MM")
+            _refuse("query_metric", name, "months must be written YYYY-MM")
     start = dt.date(int(start_month[:4]), int(start_month[5:]), 1)
     end = dt.date(int(end_month[:4]), int(end_month[5:]), 1)
     months = (end.year - start.year) * 12 + end.month - start.month + 1
     if months < 1:
-        _refuse("query_metric", args, "start_month must not be after end_month")
+        _refuse("query_metric", "start_month", "must not be after end_month")
     if months > MAX_MONTHS:
-        _refuse("query_metric", args, f"at most {MAX_MONTHS} months per call")
+        _refuse("query_metric", "end_month", f"at most {MAX_MONTHS} months per call")
 
     base = {
         "metric_id": metric_id,
@@ -203,9 +213,11 @@ def query_metric(metric_id: str, start_month: str, end_month: str, slice_by: str
         "cutoff_utc": m["checked_at_utc"],
         "quality": {"availability": m["availability"], "stale_sources": m["stale_sources"],
                     "open_reconciliation_exceptions": m["open_reconciliation_exceptions"],
-                    "min_group_size": m["min_group_size"]},
+                    "reconciliation_failures": (m["reconciliation_failures"] or "").split("; ")
+                    if m["reconciliation_failures"] else [],
+                    "min_group_size": m["min_group_size"], "threshold_entity": m["threshold_entity"]},
     }
-    if m["availability"] != "available":
+    if m["availability"] == "unavailable":
         _log("query_metric", args, "unavailable", m["stale_sources"] or "")
         return {**base, "status": "unavailable",
                 "reason": f"a source this metric depends on is stale at the cutoff: {m['stale_sources']}"}
@@ -215,7 +227,7 @@ def query_metric(metric_id: str, start_month: str, end_month: str, slice_by: str
         g = m["min_group_size"]
         rows = con.execute(SQL_ROWS, [metric_id, slice_by, start, end, MAX_ROWS + 1]).fetchall()
         if len(rows) > MAX_ROWS:
-            _refuse("query_metric", args, f"more than {MAX_ROWS} rows; narrow the range")
+            _refuse("query_metric", "end_month", f"more than {MAX_ROWS} rows; narrow the range")
         out_rows = _suppress(rows, g, split=slice_by != "total")
         total = None
         if slice_by != "total":
@@ -231,8 +243,9 @@ def query_metric(metric_id: str, start_month: str, end_month: str, slice_by: str
                 total["reason"] = "a month in this range is below the minimum group size"
     finally:
         con.close()
-    _log("query_metric", args, "ok", rows=len(out_rows))
-    return {**base, "status": "ok", "rows": out_rows, "range_total": total}
+    status = "degraded" if m["availability"] == "degraded" else "ok"
+    _log("query_metric", args, status, rows=len(out_rows))
+    return {**base, "status": status, "rows": out_rows, "range_total": total}
 
 
 if __name__ == "__main__":

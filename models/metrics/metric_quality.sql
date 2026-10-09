@@ -1,3 +1,9 @@
+{#
+  Quality policy (declared in the registry, served as-is by the MCP server):
+    unavailable  a freshness marker the metric depends on is stale: no number is served
+    degraded     a reconciliation check linked to the metric has failed: served with the named exceptions
+    available    otherwise
+#}
 {%- set reg = metric_registry() %}
 with deps as (
     {%- set rows = [] %}
@@ -30,11 +36,22 @@ stale as (
     group by d.metric_id
 ),
 
-open_exceptions as (
-    select c.metric_id, count(*) as open_exceptions
+-- every failed linked check counts: listed exceptions AND any check whose summary is not 'pass'
+failed as (
+    select c.metric_id, e.check_name || ':' || e.item_key || ' (' || e.category || ')' as failure
     from checks as c
     inner join {{ ref('rec_exceptions') }} as e on e.check_name = c.check_name and e.classification = 'exception'
-    group by c.metric_id
+    union all
+    select c.metric_id, s.check_name || ': ' || cast(s.unexplained as {{ dbt.type_string() }}) || ' unexplained'
+    from checks as c
+    inner join {{ ref('rec_summary') }} as s on s.check_name = c.check_name
+    where s.status <> 'pass' and s.exceptions = 0
+),
+
+failed_agg as (
+    select metric_id, count(*) as failed_items, string_agg(failure, '; ') as failures
+    from failed
+    group by metric_id
 )
 
 select
@@ -42,11 +59,13 @@ select
     case
         when r.status <> 'implemented' then 'contract_only'
         when s.metric_id is not null then 'unavailable'
+        when f.metric_id is not null then 'degraded'
         else 'available'
     end as availability,
     s.stale_sources,
-    coalesce(o.open_exceptions, 0) as open_reconciliation_exceptions,
+    coalesce(f.failed_items, 0) as open_reconciliation_exceptions,
+    f.failures as reconciliation_failures,
     {{ as_of() }} as checked_at_utc
 from {{ ref('metric_registry') }} as r
 left join stale as s on s.metric_id = r.metric_id
-left join open_exceptions as o on o.metric_id = r.metric_id
+left join failed_agg as f on f.metric_id = r.metric_id

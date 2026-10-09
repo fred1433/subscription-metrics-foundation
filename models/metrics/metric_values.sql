@@ -41,28 +41,19 @@ revenue as (
     {%- endfor %}
 ),
 
-month_ends as (
-    select {{ month_start('day') }} as period, max(day) as month_end
-    from ({{ day_series("'2025-04-01'", as_of_date()) }}) as d
-    group by {{ month_start('day') }}
-),
-
 active as (
-    {%- for slice_name, slice_expr in [('total', "'all'"), ('cats_on_plan', 'sub.cats_on_plan_band')] %}
+    {%- for slice_name, slice_expr in [('total', "'all'"), ('cats_on_plan', 'cats_on_plan_band')] %}
     select
         'active_subscriptions' as metric_id,
-        m.period,
+        period,
         '{{ slice_name }}' as slice_name,
         {{ slice_expr }} as slice_value,
         count(*) as numerator,
         cast(null as {{ dbt.type_bigint() }}) as denominator,
         count(*) as group_size,
         cast(null as {{ dbt.type_bigint() }}) as pending_count
-    from {{ ref('fct_subscription_state_daily') }} as s
-    inner join month_ends as m on m.month_end = s.state_date
-    inner join {{ ref('stg_platform__subscriptions') }} as sub on sub.subscription_id = s.subscription_id
-    where s.subscription_state in ('active', 'payment_retry')
-    group by m.period, {{ slice_expr }}
+    from {{ ref('fct_active_subscriptions_month_end') }}
+    group by period, {{ slice_expr }}
     {% if not loop.last %}union all{% endif %}
     {%- endfor %}
 ),
